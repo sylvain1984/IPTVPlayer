@@ -18,6 +18,8 @@ actor SourceAggregator {
         "https://raw.githubusercontent.com/YueChan/Live/main/IPTV.m3u",
         // YanG-1989 聚合源
         "https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+        // joevess 中文聚合（补充更多可用频道）
+        "https://raw.githubusercontent.com/joevess/IPTV/main/m3u/iptv.m3u",
         // 国际体育频道
         "https://iptv-org.github.io/iptv/categories/sports.m3u",
     ]
@@ -38,10 +40,14 @@ actor SourceAggregator {
             "https://live.fanmingming.com/tv/m3u/global.m3u",
             "https://raw.githubusercontent.com/joevess/IPTV/main/iptv-search.m3u",
         ],
+        "国际精选": [
+            "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+        ],
     ]
 
     func fetchAll(from urls: [String]? = nil) async -> [Channel] {
-        let sources = urls ?? Self.defaultSources
+        let catalog = Self.loadSourceCatalog()
+        let sources = urls ?? (catalog.isEmpty ? Self.defaultSources : catalog)
         var merged: [String: Channel] = [:]
         var order: [String] = []
 
@@ -67,6 +73,25 @@ actor SourceAggregator {
         }
 
         return order.compactMap { merged[$0] }
+    }
+
+    nonisolated private static func loadSourceCatalog() -> [String] {
+        let fm = FileManager.default
+        if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let path = appSupport.appendingPathComponent("IPTVPlayer/source_catalog.json")
+            if let data = try? Data(contentsOf: path),
+               let urls = try? JSONDecoder().decode([String].self, from: data),
+               !urls.isEmpty {
+                return urls
+            }
+        }
+        if let bundleURL = Bundle.main.url(forResource: "source_catalog", withExtension: "json"),
+           let data = try? Data(contentsOf: bundleURL),
+           let urls = try? JSONDecoder().decode([String].self, from: data),
+           !urls.isEmpty {
+            return urls
+        }
+        return []
     }
 
     nonisolated private static func fetchOne(_ urlString: String) async -> [Channel] {

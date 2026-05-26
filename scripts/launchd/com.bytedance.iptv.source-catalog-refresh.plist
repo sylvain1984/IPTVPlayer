@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bytedance.iptv.source-catalog-refresh</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/bytedance/Documents/iptv/IPTVPlayer/scripts/refresh_source_catalog.py</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/bytedance/Documents/iptv/IPTVPlayer/scripts/source_audit.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/bytedance/Documents/iptv/IPTVPlayer/scripts/source_audit.err.log</string>
+</dict>
+</plist>
