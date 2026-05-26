@@ -7,13 +7,18 @@ import Foundation
 
 enum M3UParser {
 
-    // MARK: - 分组规范化：把任意 group-title 映射到 4 个固定类别
-    // 匹配规则：逐条关键词匹配（不区分大小写），未命中的归入"娱乐"
-    static let normalizedGroups = ["体育", "国际", "娱乐", "新闻"]
+    // MARK: - 分组规范化：把任意 group-title 映射到更清晰的固定类别
+    // 匹配规则：逐条关键词匹配（不区分大小写），未命中的归入"综合"
+    static let normalizedGroups = ["综合", "新闻", "体育", "影视", "儿童", "国际"]
 
     nonisolated static func normalizeGroup(_ raw: String?) -> String {
-        guard let g = raw, !g.isEmpty else { return "娱乐" }
+        guard let g = raw, !g.isEmpty else { return "综合" }
         let lower = g.lowercased()
+
+        // 新闻
+        let news = ["新闻", "news", "资讯", "财经", "cctv-13", "cctv13",
+                    "凤凰资讯", "nbс news", "cnn", "bbc", "时事"]
+        if news.contains(where: { lower.contains($0) }) { return "新闻" }
 
         // 体育
         let sports = ["体育", "sport", "足球", "篮球", "网球", "赛事", "运动",
@@ -21,10 +26,13 @@ enum M3UParser {
                       "电竞", "奥运", "olympic"]
         if sports.contains(where: { lower.contains($0) }) { return "体育" }
 
-        // 新闻
-        let news = ["新闻", "news", "资讯", "财经", "cctv-13", "cctv13",
-                    "凤凰资讯", "nbс news", "cnn", "bbc", "时事", "纪录"]
-        if news.contains(where: { lower.contains($0) }) { return "新闻" }
+        // 影视
+        let movie = ["电影", "影院", "影视", "剧场", "电视剧", "综艺", "纪录", "music", "音乐"]
+        if movie.contains(where: { lower.contains($0) }) { return "影视" }
+
+        // 儿童
+        let kids = ["少儿", "卡通", "动漫", "儿童", "亲子", "动画", "kid"]
+        if kids.contains(where: { lower.contains($0) }) { return "儿童" }
 
         // 国际（港澳台 + 海外）
         let intl = ["国际", "海外", "港", "澳", "台", "tvb", "hk", "tw",
@@ -33,8 +41,7 @@ enum M3UParser {
                     "korea", "uk", "us", "foreign", "境外"]
         if intl.contains(where: { lower.contains($0) }) { return "国际" }
 
-        // 默认：娱乐（综艺/电影/音乐/生活/央视综合等）
-        return "娱乐"
+        return "综合"
     }
 
     nonisolated static func parse(_ content: String) -> [Channel] {

@@ -34,7 +34,7 @@ struct LiveChannel: Identifiable, Codable {
 }
 
 enum LiveChannelRegistry {
-    private static var isConfigured: Bool { !kRegistryURL.contains("YOUR_PROJECT_ID") }
+    static var isConfigured: Bool { !kRegistryURL.contains("YOUR_PROJECT_ID") }
 
     static func fetchAll() async -> [LiveChannel] {
         guard isConfigured,

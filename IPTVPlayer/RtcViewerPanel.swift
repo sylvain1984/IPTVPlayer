@@ -164,9 +164,11 @@ final class RtcWebViewModel: NSObject, ObservableObject {
 // MARK: - SwiftUI View
 struct RtcViewerPanel: View {
     @StateObject private var vm: RtcWebViewModel
+    @Binding var isFullscreen: Bool
 
-    init(roomId: String) {
+    init(roomId: String, isFullscreen: Binding<Bool> = .constant(false)) {
         _vm = StateObject(wrappedValue: RtcWebViewModel(roomId: roomId))
+        _isFullscreen = isFullscreen
     }
 
     var body: some View {
@@ -187,38 +189,44 @@ struct RtcViewerPanel: View {
                     Text(msg).font(.caption).foregroundStyle(.white.opacity(0.6))
                         .multilineTextAlignment(.center).padding(.horizontal, 24)
                 }
-            case .live:
-                overlayControls
             default:
                 EmptyView()
             }
+            // Overlay controls always visible (fullscreen + live badge)
+            overlayControls
         }
         .onAppear  { vm.join()  }
         .onDisappear { vm.leave() }
+        .onTapGesture(count: 2) { isFullscreen.toggle() }
     }
 
     private var overlayControls: some View {
         VStack {
             HStack {
-                HStack(spacing: 5) {
-                    Circle().fill(.red).frame(width: 6, height: 6)
-                    Text("直播中").font(.caption.bold()).foregroundStyle(.white)
+                if vm.state == .live {
+                    HStack(spacing: 5) {
+                        Circle().fill(.red).frame(width: 6, height: 6)
+                        Text("直播中").font(.caption.bold()).foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.black.opacity(0.55)).clipShape(Capsule())
                 }
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(.black.opacity(0.55)).clipShape(Capsule())
                 Spacer()
                 Button {
-                    NSApp.keyWindow?.toggleFullScreen(nil)
+                    isFullscreen.toggle()
                 } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    Image(systemName: isFullscreen
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
                         .foregroundStyle(.white)
                         .padding(8)
                         .background(.black.opacity(0.55))
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help("全屏 (⌘⌃F)")
-                .keyboardShortcut("f", modifiers: [.command, .control])
+                .help(isFullscreen ? "退出全屏 (Esc)" : "全屏 (⌘⌃F)")
+                .keyboardShortcut(isFullscreen ? .escape : "f",
+                                  modifiers: isFullscreen ? [] : [.command, .control])
             }
             .padding(12)
             Spacer()

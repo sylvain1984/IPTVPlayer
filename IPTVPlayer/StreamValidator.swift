@@ -50,8 +50,11 @@ actor StreamValidator {
                     result.score = 0.3  // 空响应但 HTTP 成功
                 }
                 result.lastWorked = Date()
-            } else if statusCode == 403 || statusCode == 404 || statusCode == 410 {
-                // 客户端错误:服务器明确拒绝,可能仍可播但概率小
+            } else if statusCode == 403 {
+                // 很多源会拒绝 Range 探测，但 AVPlayer 全量请求可播
+                result.score = 0.6
+            } else if statusCode == 404 || statusCode == 410 {
+                // 明确不存在
                 result.score = 0.1
             } else {
                 // 其他 4xx/5xx:不确定,给黄色

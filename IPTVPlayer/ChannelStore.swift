@@ -34,15 +34,18 @@ final class ChannelStore: ObservableObject {
     /// 猜你喜欢：同分组未看过的频道，按兴趣分综合评分排序
     var recommendedChannels: [Channel] {
         let recentIds = Set(recentChannels.map { $0.id })
+        let prioritized = prioritizedCCTVChannels(from: channels)
+
         let interestGroups = Set(
             channels
                 .filter { $0.isFavorite || recentIds.contains($0.id) }
                 .compactMap { $0.groupTitle }
         )
-        guard !interestGroups.isEmpty else { return [] }
+        guard !interestGroups.isEmpty else { return Array(prioritized.prefix(20)) }
 
-        return channels
+        let scored = channels
             .filter { !recentIds.contains($0.id) }
+            .filter { isChannelUsableStrict($0) || isPriorityCCTV($0) }
             .map { ch -> (Channel, Int) in
                 let wc = watchHistory[ch.id]?.watchCount ?? 0
                 let score = (ch.isFavorite ? 200 : 0)
@@ -55,6 +58,95 @@ final class ChannelStore: ObservableObject {
             .sorted { $0.1 > $1.1 }
             .prefix(20)
             .map { $0.0 }
+
+        var merged: [Channel] = []
+        var seen = Set<String>()
+        for ch in prioritized + scored where !seen.contains(ch.id) {
+            seen.insert(ch.id)
+            merged.append(ch)
+            if merged.count >= 20 { break }
+        }
+        return merged
+    }
+
+    private func prioritizedCCTVChannels(from channels: [Channel]) -> [Channel] {
+        let candidates = channels.filter { isChannelUsableStrict($0) || isPriorityCCTV($0) }
+        let cctv5HD = candidates.filter { channelType($0) == .cctv5HD }.sorted { cctvRank($0) < cctvRank($1) }
+        let cctv5 = preferred720pOnly(in: candidates.filter { channelType($0) == .cctv5 }, key: "cctv5")
+            .sorted { cctvRank($0) < cctvRank($1) }
+        let cctv5Plus = preferred720pOnly(in: candidates.filter { channelType($0) == .cctv5Plus }, key: "cctv5+")
+            .sorted { cctvRank($0) < cctvRank($1) }
+        let cctvOther = channels.filter { isChannelUsable($0) && channelType($0) == .cctvOther }.sorted { cctvRank($0) < cctvRank($1) }
+        return cctv5HD + cctv5 + cctv5Plus + cctvOther
+    }
+
+    private enum PriorityType { case none, cctv5HD, cctv5, cctv5Plus, cctvOther }
+
+    private func channelType(_ ch: Channel) -> PriorityType {
+        let normalized = normalizedCCTVName(ch.name)
+        let isCctv5 = normalized.contains("cctv5")
+        let isCctv5Plus = normalized.contains("cctv5+")
+        let isHd = normalized.contains("高清") || normalized.contains("hd")
+        if isCctv5 && isHd { return .cctv5HD }
+        if isCctv5Plus { return .cctv5Plus }
+        if isCctv5 { return .cctv5 }
+        if normalized.contains("cctv") { return .cctvOther }
+        return .none
+    }
+
+    private func normalizedCCTVName(_ name: String) -> String {
+        name.lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "－", with: "")
+            .replacingOccurrences(of: "＋", with: "+")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+
+    private func cctvRank(_ ch: Channel) -> Int {
+        let n = normalizedCCTVName(ch.name)
+        if n == "cctv5高清" { return 0 }
+        if n == "cctv5" { return 1 }
+        if n == "cctv5+" { return 2 }
+        if n.contains("cctv5高清") { return 3 }
+        if n.contains("cctv5+") { return 4 }
+        if n.contains("cctv5") { return 5 }
+        return 10
+    }
+
+    private func preferred720pOnly(in channels: [Channel], key: String) -> [Channel] {
+        let exact = channels.filter { matchesCCTVKey(normalizedCCTVName($0.name), key: key) }
+        let only720 = exact.filter { normalizedCCTVName($0.name).contains("720p") }
+        return only720.isEmpty ? exact : only720
+    }
+
+    private func matchesCCTVKey(_ normalizedName: String, key: String) -> Bool {
+        if key == "cctv5" {
+            // cctv5 组不应吸入 cctv5+
+            return normalizedName.contains("cctv5") && !normalizedName.contains("cctv5+")
+        }
+        if key == "cctv5+" {
+            return normalizedName.contains("cctv5+")
+        }
+        return normalizedName.contains(key)
+    }
+
+    private func isChannelUsable(_ ch: Channel) -> Bool {
+        guard let best = ch.bestSource else { return false }
+        if best.lastChecked == nil { return true }
+        return best.score >= 0.5
+    }
+
+    private func isChannelUsableStrict(_ ch: Channel) -> Bool {
+        ch.sources.contains { src in
+            src.lastChecked != nil && src.score >= 0.5
+        }
+    }
+
+    private func isPriorityCCTV(_ ch: Channel) -> Bool {
+        guard !ch.sources.isEmpty else { return false }
+        let n = normalizedCCTVName(ch.name)
+        return n.contains("cctv5")
     }
 
     private var liveChannels: [Channel] = []
@@ -87,7 +179,9 @@ final class ChannelStore: ObservableObject {
             channels = liveChannels
             return
         }
-        channels = liveChannels + decoded.channels.filter { !$0.isRtc }
+        channels = liveChannels + decoded.channels
+            .filter { !$0.isRtc }
+            .map { normalizeLegacyGroup($0) }
         lastRefreshDate = decoded.lastRefreshDate
         watchHistory = decoded.watchHistory ?? [:]
     }
@@ -157,6 +251,7 @@ final class ChannelStore: ObservableObject {
 
         channels = liveChannels + fetched.filter { !$0.isRtc }.map { ch -> Channel in
             var c = ch
+            c = normalizeLegacyGroup(c)
             c.isFavorite = favoriteIDs.contains(c.id)
             c.sources = c.sources.map { src in
                 if let known = oldSourceByURL[src.url] {
@@ -227,14 +322,44 @@ final class ChannelStore: ObservableObject {
 
     // MARK: - Live Channel Polling
 
+    private let bonjourBrowser = BonjourChannelBrowser()
+
     func refreshLiveChannels() async {
         let fetched = await LiveChannelRegistry.fetchAll()
-        liveChannels = fetched.map { $0.toChannel() }
+        if !fetched.isEmpty {
+            liveChannels = fetched.map { $0.toChannel() }
+        } else if liveChannels.isEmpty {
+            // Firebase 未配置时展示约定好的 fallback（broadcaster 也固定用 iptv_private）
+            liveChannels = [fallbackLiveChannel]
+        }
         let regular = channels.filter { !$0.isRtc }
         channels = liveChannels + regular
     }
 
+    private var fallbackLiveChannel: Channel {
+        Channel(
+            id: "live_fallback",
+            name: "专属直播",
+            logoURL: nil,
+            groupTitle: "专属直播",
+            sources: [StreamSource(url: "rtc://iptv_private")],
+            isFavorite: false,
+            isRtc: true,
+            pinHash: nil
+        )
+    }
+
     func startLiveChannelPolling() {
+        // Bonjour：同 WiFi 时实时发现多路直播
+        bonjourBrowser.onUpdate = { [weak self] discovered in
+            guard let self, !discovered.isEmpty else { return }
+            self.liveChannels = discovered.map { $0.toChannel() }
+            let regular = self.channels.filter { !$0.isRtc }
+            self.channels = self.liveChannels + regular
+        }
+        bonjourBrowser.start()
+
+        // 兜底：fallback 频道 + Firebase 轮询（已配置时）
         Task { await refreshLiveChannels() }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refreshLiveChannels() }
@@ -315,5 +440,12 @@ final class ChannelStore: ObservableObject {
         }
         channels = liveChannels + Array(byID.values).filter { !$0.isRtc }.sorted { $0.name < $1.name }
         save()
+    }
+
+    private func normalizeLegacyGroup(_ ch: Channel) -> Channel {
+        guard ch.groupTitle == "少儿" else { return ch }
+        var c = ch
+        c.groupTitle = "儿童"
+        return c
     }
 }

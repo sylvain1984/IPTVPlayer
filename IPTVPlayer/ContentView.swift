@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 
 private enum ChannelFilterMode: String, CaseIterable {
     case all         = "全部"
+    case exclusive   = "专属"
     case favorites   = "收藏"
     case recent      = "最近"
     case recommended = "推荐"
@@ -18,10 +19,14 @@ struct ContentView: View {
     @State private var selectedChannelID: String?
     @State private var searchText: String = ""
     @State private var selectedGroup: String? = nil
+    @State private var selectedSubcategory: String? = nil
     @State private var filterMode: ChannelFilterMode = .all
     @State private var manualSourceURL: String?
     @State private var pendingPINChannel: Channel? = nil
+    @State private var unlockedChannelIDs: Set<String> = []
     @State private var showAddURLSheet = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var isRtcFullscreen = false
     @State private var newSourceURL = ""
     @State private var showFileImporter = false
 
@@ -40,12 +45,22 @@ struct ContentView: View {
     }
 
     private var groups: [String] {
-        Array(Set(store.channels.compactMap { $0.groupTitle })).sorted()
+        Array(Set(store.channels.filter { !$0.isRtc }.compactMap { $0.groupTitle })).sorted()
+    }
+
+    private let subcategoryOrder = ["儿童", "地方", "港澳台", "纪录片", "动漫", "音乐", "赛事专区"]
+
+    private var availableSubcategories: [String] {
+        subcategoryOrder.filter { tag in
+            store.channels.contains { !$0.isRtc && matchesSubcategory($0, tag: tag) }
+        }
     }
 
     private var filteredChannels: [Channel] {
         let base: [Channel]
         switch filterMode {
+        case .exclusive:
+            base = store.channels.filter { $0.isRtc }
         case .favorites:
             base = store.channels.filter { $0.isFavorite }
         case .recent:
@@ -54,7 +69,9 @@ struct ContentView: View {
             base = store.recommendedChannels
         case .all:
             base = store.channels.filter { ch in
+                if ch.isRtc { return false }
                 if let g = selectedGroup, ch.groupTitle != g { return false }
+                if let sub = selectedSubcategory, !matchesSubcategory(ch, tag: sub) { return false }
                 return true
             }
         }
@@ -63,17 +80,29 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
         } detail: {
             detail
+        }
+        .onChange(of: isRtcFullscreen) { _, fullscreen in
+            let window = NSApp.keyWindow
+            let isWindowFS = window?.styleMask.contains(.fullScreen) ?? false
+            if fullscreen {
+                columnVisibility = .detailOnly
+                if !isWindowFS { window?.toggleFullScreen(nil) }
+            } else {
+                columnVisibility = .automatic
+                if isWindowFS { window?.toggleFullScreen(nil) }
+            }
         }
         .sheet(isPresented: $showAddURLSheet) {
             addURLSheet
         }
         .sheet(item: $pendingPINChannel) { ch in
             PINEntryView(channel: ch) { unlocked in
+                unlockedChannelIDs.insert(unlocked.id)
                 selectedChannelID = unlocked.id
                 store.recordWatch(unlocked.id)
             }
@@ -220,27 +249,48 @@ struct ContentView: View {
                 .padding(.bottom, 4)
             }
 
-            // 最近/推荐/全部 分段切换
-            Picker("", selection: $filterMode) {
-                ForEach(ChannelFilterMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 4)
-
-            // 分组 Picker 仅在「全部」模式下有意义
-            if filterMode == .all, !groups.isEmpty {
-                Picker("分组", selection: $selectedGroup) {
-                    Text("全部分组").tag(String?.none)
-                    ForEach(groups, id: \.self) { g in
-                        Text(g).tag(String?.some(g))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(ChannelFilterMode.allCases, id: \.self) { mode in
+                        Button(mode.rawValue) { filterMode = mode }
+                            .buttonStyle(.borderedProminent)
+                            .tint(filterMode == mode ? .accentColor : .secondary.opacity(0.25))
                     }
                 }
-                .labelsHidden()
                 .padding(.horizontal, 8)
-                .padding(.bottom, 6)
+                .padding(.bottom, 4)
+            }
+
+            // 分类与子类合并为一条筛选带
+            if filterMode == .all, (!groups.isEmpty || !availableSubcategories.isEmpty) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Button("全部筛选") {
+                            selectedGroup = nil
+                            selectedSubcategory = nil
+                        }
+                            .buttonStyle(.bordered)
+                            .tint(selectedGroup == nil && selectedSubcategory == nil ? .accentColor : .secondary.opacity(0.3))
+                        ForEach(groups, id: \.self) { g in
+                            Button(g) {
+                                selectedSubcategory = nil
+                                selectedGroup = (selectedGroup == g ? nil : g)
+                            }
+                                .buttonStyle(.bordered)
+                                .tint(selectedGroup == g ? .accentColor : .secondary.opacity(0.3))
+                        }
+                        ForEach(availableSubcategories, id: \.self) { tag in
+                            Button("·\(tag)") {
+                                selectedGroup = nil
+                                selectedSubcategory = (selectedSubcategory == tag ? nil : tag)
+                            }
+                                .buttonStyle(.bordered)
+                                .tint(selectedSubcategory == tag ? .accentColor : .secondary.opacity(0.3))
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 6)
+                }
             }
 
             Divider()
@@ -248,7 +298,7 @@ struct ContentView: View {
             // 列表区永远占据剩余高度,即使在拉取/验证中也保持可见
             List(selection: $selectedChannelID) {
                 if filteredChannels.isEmpty && !store.channels.isEmpty {
-                    Text("无匹配结果")
+                    Text(filterMode == .exclusive ? "暂无可用专属频道" : "无匹配结果")
                         .foregroundStyle(.secondary)
                         .padding()
                 } else if store.channels.isEmpty && !store.isRefreshing {
@@ -277,11 +327,11 @@ struct ContentView: View {
         .onChange(of: selectedChannelID) { _, newID in
             manualSourceURL = nil
             guard let id = newID, let ch = store.channels.first(where: { $0.id == id }) else { return }
-            if ch.isRtc, ch.pinHash != nil {
+            if ch.isRtc, ch.pinHash != nil, !unlockedChannelIDs.contains(id) {
                 // Deselect and show PIN sheet
                 selectedChannelID = nil
                 pendingPINChannel = ch
-            } else {
+            } else if !ch.isRtc {
                 store.recordWatch(id)
             }
         }
@@ -292,38 +342,40 @@ struct ContentView: View {
         if let ch = selectedChannel, (ch.isRtc || activeSource != nil) {
             let src = activeSource  // RTC 时为 nil，不影响
             VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 12) {
-                    Text(ch.name).font(.title2).bold()
+                if !isRtcFullscreen {
+                    HStack(alignment: .center, spacing: 12) {
+                        Text(ch.name).font(.title2).bold()
 
-                    Button {
-                        store.toggleFavorite(ch)
-                    } label: {
-                        Image(systemName: ch.isFavorite ? "star.fill" : "star")
-                            .foregroundStyle(ch.isFavorite ? .yellow : .secondary)
+                        Button {
+                            store.toggleFavorite(ch)
+                        } label: {
+                            Image(systemName: ch.isFavorite ? "star.fill" : "star")
+                                .foregroundStyle(ch.isFavorite ? .yellow : .secondary)
+                        }
+                        .buttonStyle(.plain)
+
+                        if let group = ch.groupTitle {
+                            Text(group)
+                                .font(.caption)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(Capsule())
+                        }
+
+                        Spacer()
+
+                        if let latency = src?.latencyMs {
+                            Label("\(latency) ms", systemImage: "speedometer")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .buttonStyle(.plain)
-
-                    if let group = ch.groupTitle {
-                        Text(group)
-                            .font(.caption)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.15))
-                            .clipShape(Capsule())
-                    }
-
-                    Spacer()
-
-                    if let latency = src?.latencyMs {
-                        Label("\(latency) ms", systemImage: "speedometer")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
 
                 if ch.isRtc {
-                    RtcViewerPanel(roomId: ch.rtcRoomId)
+                    RtcViewerPanel(roomId: ch.rtcRoomId, isFullscreen: $isRtcFullscreen)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let src = src {
                     PlayerContainerView(source: src)
@@ -395,6 +447,30 @@ struct ContentView: View {
     private func short(_ url: String) -> String {
         guard let host = URL(string: url)?.host else { return url }
         return host
+    }
+}
+
+private extension ContentView {
+    func matchesSubcategory(_ ch: Channel, tag: String) -> Bool {
+        let text = "\(ch.name) \(ch.groupTitle ?? "")".lowercased()
+        switch tag {
+        case "儿童":
+            return ["儿童", "少儿", "卡通", "动漫", "动画", "亲子", "kid"].contains { text.contains($0) }
+        case "地方":
+            return ["卫视", "地方", "都市", "公共", "新闻综合", "经济生活"].contains { text.contains($0) }
+        case "港澳台":
+            return ["香港", "澳门", "台湾", "tvb", "翡翠", "hk", "tw"].contains { text.contains($0) }
+        case "纪录片":
+            return ["纪录", "documentary", "discovery", "国家地理"].contains { text.contains($0) }
+        case "动漫":
+            return ["动漫", "动画", "anime", "二次元", "卡通"].contains { text.contains($0) }
+        case "音乐":
+            return ["音乐", "music", "mtv", "演唱会"].contains { text.contains($0) }
+        case "赛事专区":
+            return ["英超", "西甲", "欧冠", "nba", "cba", "ufc", "f1", "nfl", "mlb"].contains { text.contains($0) }
+        default:
+            return false
+        }
     }
 }
 
