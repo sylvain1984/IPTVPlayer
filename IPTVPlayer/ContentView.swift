@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var selectedGroup: String? = nil
     @State private var filterMode: ChannelFilterMode = .all
     @State private var manualSourceURL: String?
+    @State private var pendingPINChannel: Channel? = nil
     @State private var showAddURLSheet = false
     @State private var newSourceURL = ""
     @State private var showFileImporter = false
@@ -70,6 +71,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAddURLSheet) {
             addURLSheet
+        }
+        .sheet(item: $pendingPINChannel) { ch in
+            PINEntryView(channel: ch) { unlocked in
+                selectedChannelID = unlocked.id
+                store.recordWatch(unlocked.id)
+            }
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -269,7 +276,12 @@ struct ContentView: View {
         }
         .onChange(of: selectedChannelID) { _, newID in
             manualSourceURL = nil
-            if let id = newID {
+            guard let id = newID, let ch = store.channels.first(where: { $0.id == id }) else { return }
+            if ch.isRtc, ch.pinHash != nil {
+                // Deselect and show PIN sheet
+                selectedChannelID = nil
+                pendingPINChannel = ch
+            } else {
                 store.recordWatch(id)
             }
         }
@@ -277,7 +289,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if let ch = selectedChannel, let src = activeSource {
+        if let ch = selectedChannel, (ch.isRtc || activeSource != nil) {
+            let src = activeSource  // RTC 时为 nil，不影响
             VStack(spacing: 0) {
                 HStack(alignment: .center, spacing: 12) {
                     Text(ch.name).font(.title2).bold()
@@ -300,7 +313,7 @@ struct ContentView: View {
 
                     Spacer()
 
-                    if let latency = src.latencyMs {
+                    if let latency = src?.latencyMs {
                         Label("\(latency) ms", systemImage: "speedometer")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -309,12 +322,17 @@ struct ContentView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
 
-                PlayerContainerView(source: src)
-                    .id(src.url)
-                    .aspectRatio(16.0/9.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if ch.isRtc {
+                    RtcViewerPanel(roomId: ch.rtcRoomId)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let src = src {
+                    PlayerContainerView(source: src)
+                        .id(src.url)
+                        .aspectRatio(16.0/9.0, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
 
-                if ch.sources.count > 1 {
+                if !ch.isRtc && ch.sources.count > 1, let src = src {
                     sourcePicker(for: ch, current: src)
                 }
             }

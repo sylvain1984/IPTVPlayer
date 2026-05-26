@@ -57,6 +57,8 @@ final class ChannelStore: ObservableObject {
             .map { $0.0 }
     }
 
+    private var liveChannels: [Channel] = []
+
     private let aggregator = SourceAggregator()
     private let validator = StreamValidator()
     private var refreshTimer: Timer?
@@ -82,15 +84,16 @@ final class ChannelStore: ObservableObject {
     func load() {
         guard let data = try? Data(contentsOf: storeURL),
               let decoded = try? JSONDecoder().decode(StoredData.self, from: data) else {
+            channels = liveChannels
             return
         }
-        channels = decoded.channels
+        channels = liveChannels + decoded.channels.filter { !$0.isRtc }
         lastRefreshDate = decoded.lastRefreshDate
         watchHistory = decoded.watchHistory ?? [:]
     }
 
     func save() {
-        let payload = StoredData(channels: channels,
+        let payload = StoredData(channels: channels.filter { !$0.isRtc },
                                  lastRefreshDate: lastRefreshDate,
                                  watchHistory: watchHistory)
         guard let data = try? JSONEncoder().encode(payload) else { return }
@@ -110,7 +113,7 @@ final class ChannelStore: ObservableObject {
     /// 清除本地缓存并强制重新拉取所有频道（用于修复旧数据积累的失效流地址）
     func clearAndRefresh() async {
         validationTask?.cancel()
-        channels = []
+        channels = liveChannels
         lastRefreshDate = nil
         try? FileManager.default.removeItem(at: storeURL)
         await refresh()
@@ -152,7 +155,7 @@ final class ChannelStore: ObservableObject {
             uniquingKeysWith: { a, _ in a }
         )
 
-        channels = fetched.map { ch -> Channel in
+        channels = liveChannels + fetched.filter { !$0.isRtc }.map { ch -> Channel in
             var c = ch
             c.isFavorite = favoriteIDs.contains(c.id)
             c.sources = c.sources.map { src in
@@ -220,6 +223,22 @@ final class ChannelStore: ObservableObject {
         guard let idx = channels.firstIndex(where: { $0.id == channel.id }) else { return }
         channels[idx].isFavorite.toggle()
         save()
+    }
+
+    // MARK: - Live Channel Polling
+
+    func refreshLiveChannels() async {
+        let fetched = await LiveChannelRegistry.fetchAll()
+        liveChannels = fetched.map { $0.toChannel() }
+        let regular = channels.filter { !$0.isRtc }
+        channels = liveChannels + regular
+    }
+
+    func startLiveChannelPolling() {
+        Task { await refreshLiveChannels() }
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refreshLiveChannels() }
+        }
     }
 
     func scheduleDailyRefresh() {
@@ -294,7 +313,7 @@ final class ChannelStore: ObservableObject {
                 byID[c.id] = c
             }
         }
-        channels = Array(byID.values).sorted { $0.name < $1.name }
+        channels = liveChannels + Array(byID.values).filter { !$0.isRtc }.sorted { $0.name < $1.name }
         save()
     }
 }

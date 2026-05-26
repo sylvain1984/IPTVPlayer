@@ -17,6 +17,7 @@ struct IPTVPlayerApp: App {
                 .task {
                     await channelStore.refreshIfNeeded()
                     channelStore.scheduleDailyRefresh()
+                    channelStore.startLiveChannelPolling()
                 }
         }
         .windowStyle(.titleBar)

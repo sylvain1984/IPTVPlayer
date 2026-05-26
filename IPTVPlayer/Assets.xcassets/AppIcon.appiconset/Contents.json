@@ -59,6 +59,12 @@
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "512x512"
+    },
+    {
+      "filename" : "icon_60x60@3x.png",
+      "idiom" : "iphone",
+      "scale" : "3x",
+      "size" : "60x60"
     }
   ],
   "info" : {

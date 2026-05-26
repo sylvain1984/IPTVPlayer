@@ -12,6 +12,13 @@ struct Channel: Identifiable, Codable, Hashable, Sendable {
     var groupTitle: String?
     var sources: [StreamSource]
     var isFavorite: Bool = false
+    var isRtc: Bool = false
+    var pinHash: String? = nil  // nil = no PIN required
+
+    /// RTC room ID extracted from rtc:// source URL
+    nonisolated var rtcRoomId: String {
+        sources.first?.url.replacingOccurrences(of: "rtc://", with: "") ?? "iptv_private"
+    }
 
     nonisolated var bestSource: StreamSource? {
         sources.sorted { lhs, rhs in
