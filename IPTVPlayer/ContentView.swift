@@ -25,10 +25,10 @@ struct ContentView: View {
     @State private var pendingPINChannel: Channel? = nil
     @State private var unlockedChannelIDs: Set<String> = []
     @State private var showAddURLSheet = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var isRtcFullscreen = false
     @State private var newSourceURL = ""
     @State private var showFileImporter = false
+    @State private var refreshTicket: Int = 0
 
 
     private var selectedChannel: Channel? {
@@ -45,14 +45,22 @@ struct ContentView: View {
     }
 
     private var groups: [String] {
-        Array(Set(store.channels.filter { !$0.isRtc }.compactMap { $0.groupTitle })).sorted()
+        Array(Set(
+            store.channels
+                .filter { !$0.isRtc }
+                .compactMap { channel in
+                    normalizedLabel(channel.groupTitle)
+                }
+        )).sorted()
     }
 
     private let subcategoryOrder = ["儿童", "地方", "港澳台", "纪录片", "动漫", "音乐", "赛事专区"]
 
     private var availableSubcategories: [String] {
         subcategoryOrder.filter { tag in
-            store.channels.contains { !$0.isRtc && matchesSubcategory($0, tag: tag) }
+            let cleanedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanedTag.isEmpty else { return false }
+            return store.channels.contains { !$0.isRtc && matchesSubcategory($0, tag: tag) }
         }
     }
 
@@ -80,21 +88,18 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
         } detail: {
             detail
         }
         .onChange(of: isRtcFullscreen) { _, fullscreen in
-            let window = NSApp.keyWindow
-            let isWindowFS = window?.styleMask.contains(.fullScreen) ?? false
-            if fullscreen {
-                columnVisibility = .detailOnly
-                if !isWindowFS { window?.toggleFullScreen(nil) }
-            } else {
-                columnVisibility = .automatic
-                if isWindowFS { window?.toggleFullScreen(nil) }
+            DispatchQueue.main.async {
+                guard let window = NSApp.keyWindow else { return }
+                let isWindowFS = window.styleMask.contains(.fullScreen)
+                if fullscreen && !isWindowFS { window.toggleFullScreen(nil) }
+                else if !fullscreen && isWindowFS { window.toggleFullScreen(nil) }
             }
         }
         .sheet(isPresented: $showAddURLSheet) {
@@ -120,6 +125,29 @@ struct ContentView: View {
             case .failure(let err):
                 print("File importer error: \(err)")
             }
+        }
+        .onChange(of: filterMode) { _, newMode in
+            // 切换筛选时若当前选中项不在新列表中，先清空选择，避免 macOS List 选择状态异常。
+            if let id = selectedChannelID {
+                let stillVisible: Bool
+                switch newMode {
+                case .exclusive:
+                    stillVisible = store.channels.contains { $0.id == id && $0.isRtc }
+                case .favorites:
+                    stillVisible = store.channels.contains { $0.id == id && $0.isFavorite }
+                case .recent:
+                    stillVisible = store.recentChannels.contains { $0.id == id }
+                case .recommended:
+                    stillVisible = store.recommendedChannels.contains { $0.id == id }
+                case .all:
+                    stillVisible = store.channels.contains { $0.id == id && !$0.isRtc }
+                }
+                if !stillVisible { selectedChannelID = nil }
+            }
+        }
+        .task(id: refreshTicket) {
+            guard refreshTicket > 0 else { return }
+            await store.refresh()
         }
     }
 
@@ -171,6 +199,30 @@ struct ContentView: View {
         .padding(20)
     }
 
+    private func filterChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(isSelected ? .accentColor : .secondary.opacity(0.3))
+    }
+
+    private func normalizedLabel(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        let meaningfulScalars = value.unicodeScalars.filter { scalar in
+            !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+            !CharacterSet.punctuationCharacters.contains(scalar) &&
+            !CharacterSet.symbols.contains(scalar)
+        }
+        return meaningfulScalars.isEmpty ? nil : value
+    }
+
     private var sidebar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -183,16 +235,19 @@ struct ContentView: View {
                         .lineLimit(1)
                 }
 
-                Button {
-                    Task { await store.refresh() }
-                } label: {
+                Group {
                     if store.isRefreshing {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
-                .disabled(store.isRefreshing)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !store.isRefreshing else { return }
+                    refreshTicket &+= 1
+                }
                 .help("立即刷新")
 
                 // 把次要操作收进 Menu,避免标题栏挤
@@ -249,48 +304,55 @@ struct ContentView: View {
                 .padding(.bottom, 4)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(ChannelFilterMode.allCases, id: \.self) { mode in
-                        Button(mode.rawValue) { filterMode = mode }
-                            .buttonStyle(.borderedProminent)
-                            .tint(filterMode == mode ? .accentColor : .secondary.opacity(0.25))
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 72), spacing: 6, alignment: .leading)],
+                alignment: .leading,
+                spacing: 6
+            ) {
+                ForEach(ChannelFilterMode.allCases, id: \.self) { mode in
+                    filterChip(
+                        title: mode.rawValue,
+                        isSelected: filterMode == mode
+                    ) {
+                        filterMode = mode
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 4)
             }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
 
-            // 分类与子类合并为一条筛选带
+            // 分类合并显示，避免拆成两块后占用过多垂直空间
             if filterMode == .all, (!groups.isEmpty || !availableSubcategories.isEmpty) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        Button("全部筛选") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("分类")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 78), spacing: 6, alignment: .leading)],
+                        alignment: .leading,
+                        spacing: 6
+                    ) {
+                        filterChip(title: "全部", isSelected: selectedGroup == nil && selectedSubcategory == nil) {
                             selectedGroup = nil
                             selectedSubcategory = nil
                         }
-                            .buttonStyle(.bordered)
-                            .tint(selectedGroup == nil && selectedSubcategory == nil ? .accentColor : .secondary.opacity(0.3))
                         ForEach(groups, id: \.self) { g in
-                            Button(g) {
+                            filterChip(title: g, isSelected: selectedGroup == g) {
                                 selectedSubcategory = nil
                                 selectedGroup = (selectedGroup == g ? nil : g)
                             }
-                                .buttonStyle(.bordered)
-                                .tint(selectedGroup == g ? .accentColor : .secondary.opacity(0.3))
                         }
                         ForEach(availableSubcategories, id: \.self) { tag in
-                            Button("·\(tag)") {
+                            filterChip(title: tag, isSelected: selectedSubcategory == tag) {
                                 selectedGroup = nil
                                 selectedSubcategory = (selectedSubcategory == tag ? nil : tag)
                             }
-                                .buttonStyle(.bordered)
-                                .tint(selectedSubcategory == tag ? .accentColor : .secondary.opacity(0.3))
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 6)
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
             }
 
             Divider()
