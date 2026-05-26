@@ -198,6 +198,16 @@ struct RtcViewerPanel: View {
         .onAppear  { vm.join()  }
         .onDisappear { vm.leave() }
         .onTapGesture(count: 2) { isFullscreen.toggle() }
+        // ESC exits fullscreen; ⌘⌃F enters — stable shortcuts, not dynamic
+        .background(
+            Group {
+                if isFullscreen {
+                    Button("") { isFullscreen = false }
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .hidden()
+                }
+            }
+        )
     }
 
     private var overlayControls: some View {
@@ -225,8 +235,7 @@ struct RtcViewerPanel: View {
                 }
                 .buttonStyle(.plain)
                 .help(isFullscreen ? "退出全屏 (Esc)" : "全屏 (⌘⌃F)")
-                .keyboardShortcut(isFullscreen ? .escape : "f",
-                                  modifiers: isFullscreen ? [] : [.command, .control])
+                .keyboardShortcut("f", modifiers: [.command, .control])
             }
             .padding(12)
             Spacer()

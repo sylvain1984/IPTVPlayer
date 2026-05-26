@@ -199,13 +199,14 @@ struct ContentView: View {
         .padding(20)
     }
 
-    private func filterChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private func filterChip(id: String, title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .id(id)
         .buttonStyle(.bordered)
         .controlSize(.small)
         .tint(isSelected ? .accentColor : .secondary.opacity(0.3))
@@ -311,6 +312,7 @@ struct ContentView: View {
             ) {
                 ForEach(ChannelFilterMode.allCases, id: \.self) { mode in
                     filterChip(
+                        id: "mode-\(mode.rawValue)",
                         title: mode.rawValue,
                         isSelected: filterMode == mode
                     ) {
@@ -333,18 +335,18 @@ struct ContentView: View {
                         alignment: .leading,
                         spacing: 6
                     ) {
-                        filterChip(title: "全部", isSelected: selectedGroup == nil && selectedSubcategory == nil) {
+                        filterChip(id: "all", title: "全部", isSelected: selectedGroup == nil && selectedSubcategory == nil) {
                             selectedGroup = nil
                             selectedSubcategory = nil
                         }
                         ForEach(groups, id: \.self) { g in
-                            filterChip(title: g, isSelected: selectedGroup == g) {
+                            filterChip(id: "group-\(g)", title: g, isSelected: selectedGroup == g) {
                                 selectedSubcategory = nil
                                 selectedGroup = (selectedGroup == g ? nil : g)
                             }
                         }
                         ForEach(availableSubcategories, id: \.self) { tag in
-                            filterChip(title: tag, isSelected: selectedSubcategory == tag) {
+                            filterChip(id: "sub-\(tag)", title: tag, isSelected: selectedSubcategory == tag) {
                                 selectedGroup = nil
                                 selectedSubcategory = (selectedSubcategory == tag ? nil : tag)
                             }

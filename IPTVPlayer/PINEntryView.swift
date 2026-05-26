@@ -10,6 +10,10 @@ struct PINEntryView: View {
     @State private var showError = false
     @FocusState private var keyboardFocused: Bool
 
+    private func normalizedPIN(_ input: String) -> String {
+        input.compactMap { $0.wholeNumberValue }.map(String.init).joined()
+    }
+
     var body: some View {
         VStack(spacing: 28) {
             VStack(spacing: 8) {
@@ -38,7 +42,7 @@ struct PINEntryView: View {
                 .frame(width: 1, height: 1)
                 .opacity(0.01)
                 .onChange(of: pin) { _, new in
-                    let filtered = String(new.filter(\.isNumber).prefix(4))
+                    let filtered = String(normalizedPIN(new).prefix(4))
                     if filtered != new { pin = filtered; return }
                     if filtered.count == 4 { verify() }
                 }
