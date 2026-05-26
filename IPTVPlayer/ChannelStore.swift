@@ -10,11 +10,6 @@ import Combine
 @MainActor
 final class ChannelStore: ObservableObject {
 
-    // 显式声明 nonisolated 的 objectWillChange,
-    // 否则 @MainActor 类下自动合成的会被推断成 MainActor 隔离,
-    // 不满足 ObservableObject 协议要求 -> 编译报"does not conform"。
-    nonisolated let objectWillChange = ObservableObjectPublisher()
-
     @Published var channels: [Channel] = []
     @Published var isRefreshing: Bool = false
     @Published var refreshProgress: String = ""
@@ -154,6 +149,8 @@ final class ChannelStore: ObservableObject {
     private let aggregator = SourceAggregator()
     private let validator = StreamValidator()
     private var refreshTimer: Timer?
+    private var livePollTimer: Timer?
+    private var hasStartedLivePolling = false
 
     private var storeURL: URL {
         let base = FileManager.default
@@ -173,15 +170,39 @@ final class ChannelStore: ObservableObject {
         load()
     }
 
+    /// 保证 Channel.id 全局唯一，避免 macOS List(selection:) 因重复标识崩溃。
+    private func deduplicatedChannels(_ input: [Channel]) -> [Channel] {
+        var byID: [String: Channel] = [:]
+        byID.reserveCapacity(input.count)
+
+        for ch in input {
+            guard var existing = byID[ch.id] else {
+                byID[ch.id] = ch
+                continue
+            }
+            // 合并源并去重 URL，优先保留已有验证结果
+            for src in ch.sources where !existing.sources.contains(where: { $0.url == src.url }) {
+                existing.sources.append(src)
+            }
+            existing.isFavorite = existing.isFavorite || ch.isFavorite
+            if existing.groupTitle == nil { existing.groupTitle = ch.groupTitle }
+            if existing.logoURL == nil { existing.logoURL = ch.logoURL }
+            if existing.pinHash == nil { existing.pinHash = ch.pinHash }
+            byID[ch.id] = existing
+        }
+        return byID.values.sorted { $0.name < $1.name }
+    }
+
     func load() {
         guard let data = try? Data(contentsOf: storeURL),
               let decoded = try? JSONDecoder().decode(StoredData.self, from: data) else {
             channels = liveChannels
             return
         }
-        channels = liveChannels + decoded.channels
+        channels = deduplicatedChannels(liveChannels + decoded.channels
             .filter { !$0.isRtc }
             .map { normalizeLegacyGroup($0) }
+        )
         lastRefreshDate = decoded.lastRefreshDate
         watchHistory = decoded.watchHistory ?? [:]
     }
@@ -249,7 +270,7 @@ final class ChannelStore: ObservableObject {
             uniquingKeysWith: { a, _ in a }
         )
 
-        channels = liveChannels + fetched.filter { !$0.isRtc }.map { ch -> Channel in
+        channels = deduplicatedChannels(liveChannels + fetched.filter { !$0.isRtc }.map { ch -> Channel in
             var c = ch
             c = normalizeLegacyGroup(c)
             c.isFavorite = favoriteIDs.contains(c.id)
@@ -265,7 +286,7 @@ final class ChannelStore: ObservableObject {
                 return src
             }
             return c
-        }
+        })
 
         lastRefreshDate = Date()
         refreshProgress = "已加载 \(channels.count) 个频道"
@@ -328,12 +349,15 @@ final class ChannelStore: ObservableObject {
         let fetched = await LiveChannelRegistry.fetchAll()
         if !fetched.isEmpty {
             liveChannels = fetched.map { $0.toChannel() }
-        } else if liveChannels.isEmpty {
+        } else if LiveChannelRegistry.isConfigured {
+            // 已配置 Firebase 但当前没有可用直播：清空旧缓存，避免显示过期房间导致“等待开播”。
+            liveChannels = []
+        } else {
             // Firebase 未配置时展示约定好的 fallback（broadcaster 也固定用 iptv_private）
             liveChannels = [fallbackLiveChannel]
         }
         let regular = channels.filter { !$0.isRtc }
-        channels = liveChannels + regular
+        channels = deduplicatedChannels(liveChannels + regular)
     }
 
     private var fallbackLiveChannel: Channel {
@@ -350,18 +374,22 @@ final class ChannelStore: ObservableObject {
     }
 
     func startLiveChannelPolling() {
+        guard !hasStartedLivePolling else { return }
+        hasStartedLivePolling = true
+
         // Bonjour：同 WiFi 时实时发现多路直播
         bonjourBrowser.onUpdate = { [weak self] discovered in
             guard let self, !discovered.isEmpty else { return }
             self.liveChannels = discovered.map { $0.toChannel() }
             let regular = self.channels.filter { !$0.isRtc }
-            self.channels = self.liveChannels + regular
+            self.channels = self.deduplicatedChannels(self.liveChannels + regular)
         }
         bonjourBrowser.start()
 
         // 兜底：fallback 频道 + Firebase 轮询（已配置时）
         Task { await refreshLiveChannels() }
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        livePollTimer?.invalidate()
+        livePollTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refreshLiveChannels() }
         }
     }
@@ -438,7 +466,7 @@ final class ChannelStore: ObservableObject {
                 byID[c.id] = c
             }
         }
-        channels = liveChannels + Array(byID.values).filter { !$0.isRtc }.sorted { $0.name < $1.name }
+        channels = deduplicatedChannels(liveChannels + Array(byID.values).filter { !$0.isRtc })
         save()
     }
 
