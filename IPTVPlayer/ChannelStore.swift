@@ -303,9 +303,13 @@ final class ChannelStore: ObservableObject {
 
     /// 后台验证:大并发、短超时、不阻塞 UI、可取消
     private func validateAllInBackground() async {
-        let total = channels.count
-        let chunkSize = 48  // 大幅提升并发(原来 8)
+        let chunkSize = 48
         let localValidator = validator
+
+        // 建一次 id→index 映射，验证期间不会重排，下标稳定
+        var indexMap: [String: Int] = Dictionary(
+            uniqueKeysWithValues: channels.enumerated().map { ($1.id, $0) }
+        )
 
         for start in stride(from: 0, to: channels.count, by: chunkSize) {
             if Task.isCancelled { break }
@@ -318,7 +322,7 @@ final class ChannelStore: ObservableObject {
                 }
                 for await updated in group {
                     if Task.isCancelled { break }
-                    if let idx = channels.firstIndex(where: { $0.id == updated.id }) {
+                    if let idx = indexMap[updated.id] {
                         channels[idx] = updated
                     }
                 }
