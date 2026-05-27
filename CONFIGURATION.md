@@ -7,7 +7,7 @@ variables, or `Info.plist` expansion:
 
 ```sh
 RTC_APP_ID=your_volcengine_rtc_app_id
-RTC_TOKEN_URL=https://your-api.example.com/rtc/token
+RTC_TOKEN_URL=https://iptv-rtc-token.iptv75390.workers.dev/rtc/token
 LIVE_REGISTRY_URL=https://your-project-default-rtdb.firebaseio.com/live_channels
 ```
 
