@@ -10,8 +10,6 @@ import WebKit
 import AppKit
 import Combine
 
-private let kAppId = "6a13b1373d860b0617f988aa"
-
 // MARK: - Weak script-message bridge (avoids WKUserContentController retain cycle)
 private final class WeakMsgHandler: NSObject, WKScriptMessageHandler {
     weak var vm: RtcWebViewModel?
@@ -45,14 +43,17 @@ final class RtcWebViewModel: NSObject, ObservableObject {
     func join() {
         guard state == .idle else { return }
         state = .connecting
+        Task {
+            do {
+                let credentials = try await RTCTokenService.fetch(roomId: roomId, userId: userId, role: "viewer")
+                loadRoom(credentials: credentials)
+            } catch {
+                state = .error("Token 获取失败")
+            }
+        }
+    }
 
-        let token = RTCTokenGenerator.viewerToken(
-            appId: kAppId,
-            appKey: "221fb57fe116497b9201c3c635f1b23c",
-            roomId: roomId,
-            userId: userId
-        )
-
+    private func loadRoom(credentials: RTCTokenCredentials) {
         // Write SDK + HTML to a temp dir so loadFileURL can serve them normally
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("rtcviewer", isDirectory: true)
@@ -64,7 +65,7 @@ final class RtcWebViewModel: NSObject, ObservableObject {
             try? FileManager.default.copyItem(at: sdkSrc, to: sdkDest)
         }
 
-        let credScript = "window.__rtc={appId:'\(kAppId)',token:'\(token)',roomId:'\(roomId)',userId:'\(userId)'};"
+        let credScript = "window.__rtc={appId:'\(Self.js(credentials.appId))',token:'\(Self.js(credentials.token))',roomId:'\(Self.js(roomId))',userId:'\(Self.js(userId))'};"
         let htmlURL = tmpDir.appendingPathComponent("viewer.html")
         try? Self.makeHTML(credScript: credScript).write(to: htmlURL, atomically: true, encoding: .utf8)
 
@@ -78,6 +79,14 @@ final class RtcWebViewModel: NSObject, ObservableObject {
             "typeof leaveRoom==='function'&&leaveRoom()", completionHandler: nil
         )
         state = .idle
+    }
+
+    private static func js(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 
     fileprivate func handle(_ msg: String) {

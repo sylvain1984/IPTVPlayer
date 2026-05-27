@@ -1,8 +1,61 @@
 import Foundation
 import CryptoKit
 
-// 同 LiveBroadcaster/LiveChannelRegistry.swift — 保持两端 URL 一致
-private let kRegistryURL = "https://iptv-75390-default-rtdb.firebaseio.com/live_channels"
+enum AppConfig {
+    static let rtcAppId = value(for: "RTC_APP_ID")
+    static let rtcTokenURL = value(for: "RTC_TOKEN_URL")
+    static let liveRegistryURL = value(for: "LIVE_REGISTRY_URL")
+
+    private static func value(for key: String) -> String {
+        if let env = ProcessInfo.processInfo.environment[key], !env.isEmpty {
+            return env
+        }
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+              !value.isEmpty,
+              !value.hasPrefix("$(")
+        else { return "" }
+        return value
+    }
+}
+
+struct RTCTokenCredentials {
+    let appId: String
+    let token: String
+}
+
+enum RTCTokenService {
+    private struct RequestBody: Encodable {
+        let roomId: String
+        let userId: String
+        let role: String
+    }
+
+    private struct ResponseBody: Decodable {
+        let token: String
+        let appId: String?
+    }
+
+    static func fetch(roomId: String, userId: String, role: String) async throws -> RTCTokenCredentials {
+        guard let url = URL(string: AppConfig.rtcTokenURL), !AppConfig.rtcTokenURL.isEmpty else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(RequestBody(roomId: roomId, userId: userId, role: role))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        let body = try JSONDecoder().decode(ResponseBody.self, from: data)
+        let appId = body.appId?.isEmpty == false ? body.appId! : AppConfig.rtcAppId
+        guard !appId.isEmpty, !body.token.isEmpty else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        return RTCTokenCredentials(appId: appId, token: body.token)
+    }
+}
 
 struct LiveChannel: Identifiable, Decodable {
     var id: String
@@ -73,7 +126,7 @@ struct LiveChannel: Identifiable, Decodable {
 }
 
 enum LiveChannelRegistry {
-    static var isConfigured: Bool { true }
+    static var isConfigured: Bool { !AppConfig.liveRegistryURL.isEmpty }
 
     private static func normalizeTimestamp(_ ts: Double) -> Double {
         // 兼容秒(10位)和毫秒(13位)时间戳
@@ -119,7 +172,7 @@ enum LiveChannelRegistry {
 
     static func fetchAll() async -> [LiveChannel] {
         guard isConfigured,
-              let url = URL(string: "\(kRegistryURL).json"),
+              let url = URL(string: "\(AppConfig.liveRegistryURL).json"),
               let (data, _) = try? await URLSession.shared.data(from: url),
               data != Data("null".utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

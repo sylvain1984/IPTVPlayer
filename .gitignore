@@ -6,6 +6,7 @@
 # Xcode
 *.xcuserdata/
 DerivedData/
+.derivedData/
 *.pbxuser
 !default.pbxuser
 *.mode1v3
@@ -33,3 +34,6 @@ Package.resolved
 
 # CocoaPods
 Pods/
+
+# Local secrets / machine-specific config
+Local.xcconfig
