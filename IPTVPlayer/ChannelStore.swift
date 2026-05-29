@@ -306,15 +306,13 @@ final class ChannelStore: ObservableObject {
         let chunkSize = 48
         let localValidator = validator
 
-        // 建一次 id→index 映射，验证期间不会重排，下标稳定
-        var indexMap: [String: Int] = Dictionary(
-            uniqueKeysWithValues: channels.enumerated().map { ($1.id, $0) }
-        )
+        // 验证期间直播频道轮询/刷新可能改变 channels，遍历使用快照，写回再按当前 id 定位。
+        let snapshot = channels
 
-        for start in stride(from: 0, to: channels.count, by: chunkSize) {
+        for start in stride(from: 0, to: snapshot.count, by: chunkSize) {
             if Task.isCancelled { break }
-            let end = min(start + chunkSize, channels.count)
-            let slice = Array(channels[start..<end])
+            let end = min(start + chunkSize, snapshot.count)
+            let slice = Array(snapshot[start..<end])
 
             await withTaskGroup(of: Channel.self) { group in
                 for ch in slice {
@@ -322,7 +320,7 @@ final class ChannelStore: ObservableObject {
                 }
                 for await updated in group {
                     if Task.isCancelled { break }
-                    if let idx = indexMap[updated.id] {
+                    if let idx = channels.firstIndex(where: { $0.id == updated.id }) {
                         channels[idx] = updated
                     }
                 }
