@@ -391,7 +391,7 @@ final class ChannelStore: ObservableObject {
         // 兜底：fallback 频道 + Firebase 轮询（已配置时）
         Task { await refreshLiveChannels() }
         livePollTimer?.invalidate()
-        livePollTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
+        livePollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refreshLiveChannels() }
         }
     }

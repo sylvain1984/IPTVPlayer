@@ -15,9 +15,10 @@ struct IPTVPlayerApp: App {
                 .environmentObject(channelStore)
                 .frame(minWidth: 960, minHeight: 600)
                 .task {
-                    await channelStore.refreshIfNeeded()
-                    channelStore.scheduleDailyRefresh()
+                    // Live channel polling starts immediately, in parallel with M3U refresh
                     channelStore.startLiveChannelPolling()
+                    channelStore.scheduleDailyRefresh()
+                    await channelStore.refreshIfNeeded()
                 }
         }
         .windowStyle(.titleBar)

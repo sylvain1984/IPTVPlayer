@@ -24,11 +24,14 @@ struct ContentView: View {
     @State private var manualSourceURL: String?
     @State private var pendingPINChannel: Channel? = nil
     @State private var unlockedChannelIDs: Set<String> = []
+    @State private var unlockedPINHashes: Set<String> = []
     @State private var showAddURLSheet = false
     @State private var isRtcFullscreen = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var newSourceURL = ""
     @State private var showFileImporter = false
     @State private var refreshTicket: Int = 0
+    @State private var autoSwitchedLiveIDs: Set<String> = []
 
 
     private var selectedChannel: Channel? {
@@ -88,18 +91,34 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
         } detail: {
             detail
         }
         .onChange(of: isRtcFullscreen) { _, fullscreen in
-            DispatchQueue.main.async {
-                guard let window = NSApp.keyWindow else { return }
+            columnVisibility = fullscreen ? .detailOnly : .all
+            // Use mainWindow, not keyWindow — keyWindow may be a sheet overlay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                guard let window = NSApp.mainWindow ?? NSApp.windows.first else { return }
                 let isWindowFS = window.styleMask.contains(.fullScreen)
                 if fullscreen && !isWindowFS { window.toggleFullScreen(nil) }
                 else if !fullscreen && isWindowFS { window.toggleFullScreen(nil) }
+            }
+        }
+        .onChange(of: store.channels) { _, channels in
+            let liveIDs = Set(channels.filter { $0.isRtc }.map { $0.id })
+            let newID = liveIDs.subtracting(autoSwitchedLiveIDs).first
+            autoSwitchedLiveIDs = autoSwitchedLiveIDs.union(liveIDs)
+            guard let id = newID, id != selectedChannelID else { return }
+            let ch = channels.first { $0.id == id }
+            if let ch, ch.isRtc, let pinHash = ch.pinHash, !pinHash.isEmpty,
+               !unlockedChannelIDs.contains(id), !unlockedPINHashes.contains(pinHash) {
+                pendingPINChannel = ch
+            } else {
+                selectedChannelID = id
+                isRtcFullscreen = true
             }
         }
         .sheet(isPresented: $showAddURLSheet) {
@@ -108,7 +127,9 @@ struct ContentView: View {
         .sheet(item: $pendingPINChannel) { ch in
             PINEntryView(channel: ch) { unlocked in
                 unlockedChannelIDs.insert(unlocked.id)
+                if let h = unlocked.pinHash { unlockedPINHashes.insert(h) }
                 selectedChannelID = unlocked.id
+                if unlocked.isRtc { isRtcFullscreen = true }
                 store.recordWatch(unlocked.id)
             }
         }
@@ -440,6 +461,7 @@ struct ContentView: View {
 
                 if ch.isRtc {
                     RtcViewerPanel(roomId: ch.rtcRoomId, isFullscreen: $isRtcFullscreen)
+                        .id(ch.rtcRoomId)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let src = src {
                     PlayerContainerView(source: src)

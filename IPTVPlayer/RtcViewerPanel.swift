@@ -29,6 +29,7 @@ final class RtcWebViewModel: NSObject, ObservableObject {
 
     private let roomId: String
     private let userId: String
+    private var connectingDebounce: Task<Void, Never>?
 
     init(roomId: String, userId: String = "viewer_mac_\(Int.random(in: 1000...9999))") {
         self.roomId = roomId
@@ -91,10 +92,20 @@ final class RtcWebViewModel: NSObject, ObservableObject {
 
     fileprivate func handle(_ msg: String) {
         if msg.hasPrefix("live:") {
+            connectingDebounce?.cancel()
+            connectingDebounce = nil
             state = .live
         } else if msg == "connecting" {
-            if state == .live { state = .connecting }
+            guard state == .live else { return }
+            // Debounce: only go black after 5s of sustained disconnection
+            connectingDebounce?.cancel()
+            connectingDebounce = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.state = .connecting
+            }
         } else if msg.hasPrefix("error:") {
+            connectingDebounce?.cancel()
             state = .error(String(msg.dropFirst(6)))
         }
     }
@@ -117,9 +128,33 @@ final class RtcWebViewModel: NSObject, ObservableObject {
         <div id="wrap"></div>
         <script>
         var engine = null;
+        var _bgTimer = null;
 
         function notify(s) {
           try { window.webkit.messageHandlers.rtcState.postMessage(s); } catch(e) {}
+        }
+
+        // Periodically snapshot the video frame into #wrap background-image.
+        // When the SDK removes its video element on stream loss, the background shows the last frame.
+        function startSnapshot() {
+          stopSnapshot();
+          _bgTimer = setInterval(function() {
+            var v = document.querySelector('#wrap video');
+            if (!v || !v.videoWidth || v.readyState < 2) return;
+            try {
+              var c = document.createElement('canvas');
+              c.width = v.videoWidth; c.height = v.videoHeight;
+              c.getContext('2d').drawImage(v, 0, 0);
+              var w = document.getElementById('wrap');
+              w.style.backgroundImage = 'url(' + c.toDataURL('image/jpeg', 0.85) + ')';
+              w.style.backgroundSize = 'contain';
+              w.style.backgroundRepeat = 'no-repeat';
+              w.style.backgroundPosition = 'center';
+            } catch(e) {}
+          }, 1500);
+        }
+        function stopSnapshot() {
+          if (_bgTimer) { clearInterval(_bgTimer); _bgTimer = null; }
         }
 
         async function joinRoom(appId, token, roomId, userId) {
@@ -134,11 +169,13 @@ final class RtcWebViewModel: NSObject, ObservableObject {
                   userId: e.userId,
                   renderDom: document.getElementById('wrap')
                 });
+                startSnapshot();
                 notify('live:' + e.userId);
               } catch(err) { notify('error:' + err.message); }
             });
 
             engine.on(VERTC.events.onUserUnpublishStream, function() {
+              // Keep background image (last snapshot) — video element will be removed by SDK
               notify('connecting');
             });
 
@@ -157,6 +194,7 @@ final class RtcWebViewModel: NSObject, ObservableObject {
         }
 
         function leaveRoom() {
+          stopSnapshot();
           if (engine) { try { engine.leaveRoom(); } catch(e) {} engine = null; }
         }
 

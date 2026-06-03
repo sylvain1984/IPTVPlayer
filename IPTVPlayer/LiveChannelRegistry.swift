@@ -172,16 +172,15 @@ enum LiveChannelRegistry {
 
     static func fetchAll() async -> [LiveChannel] {
         guard isConfigured,
-              let url = URL(string: "\(AppConfig.liveRegistryURL).json"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              data != Data("null".utf8),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let url = URL(string: "\(AppConfig.liveRegistryURL)/live/channels"),
+              let (data, resp) = try? await URLSession.shared.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
 
         let now = Date().timeIntervalSince1970
-        let maxAge: TimeInterval = 8 * 3600
-        return dict.values.compactMap(parseLiveChannel)
-        .filter { (now - $0.startedAt) >= 0 && (now - $0.startedAt) <= maxAge }
-        .sorted { $0.startedAt < $1.startedAt }
+        return arr.compactMap(parseLiveChannel)
+            .filter { (now - $0.startedAt) >= 0 && (now - $0.startedAt) <= 90 }
+            .sorted { $0.startedAt < $1.startedAt }
     }
 }
