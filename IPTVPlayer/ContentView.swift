@@ -8,7 +8,6 @@ import UniformTypeIdentifiers
 
 private enum ChannelFilterMode: String, CaseIterable {
     case all         = "全部"
-    case exclusive   = "专属"
     case favorites   = "收藏"
     case recent      = "最近"
     case recommended = "推荐"
@@ -16,6 +15,7 @@ private enum ChannelFilterMode: String, CaseIterable {
 
 struct ContentView: View {
     @EnvironmentObject var store: ChannelStore
+    @StateObject private var rtcVM = RtcWebViewModel(roomId: "iptv_private")
     @State private var selectedChannelID: String?
     @State private var searchText: String = ""
     @State private var selectedGroup: String? = nil
@@ -31,7 +31,6 @@ struct ContentView: View {
     @State private var newSourceURL = ""
     @State private var showFileImporter = false
     @State private var refreshTicket: Int = 0
-    @State private var autoSwitchedLiveIDs: Set<String> = []
 
 
     private var selectedChannel: Channel? {
@@ -70,8 +69,6 @@ struct ContentView: View {
     private var filteredChannels: [Channel] {
         let base: [Channel]
         switch filterMode {
-        case .exclusive:
-            base = store.channels.filter { $0.isRtc }
         case .favorites:
             base = store.channels.filter { $0.isFavorite }
         case .recent:
@@ -97,28 +94,39 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        .overlay {
+            RtcViewerPanel(vm: rtcVM, isFullscreen: $isRtcFullscreen)
+                .opacity(isRtcFullscreen ? 1 : 0)
+                .allowsHitTesting(isRtcFullscreen)
+                .ignoresSafeArea()
+        }
+        .onAppear { rtcVM.join() }
+        .onChange(of: rtcVM.state) { oldState, newState in
+            if newState == .live {
+                isRtcFullscreen = true
+            } else if oldState == .live {
+                isRtcFullscreen = false
+            }
+        }
         .onChange(of: isRtcFullscreen) { _, fullscreen in
             columnVisibility = fullscreen ? .detailOnly : .all
-            // Use mainWindow, not keyWindow — keyWindow may be a sheet overlay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 guard let window = NSApp.mainWindow ?? NSApp.windows.first else { return }
                 let isWindowFS = window.styleMask.contains(.fullScreen)
-                if fullscreen && !isWindowFS { window.toggleFullScreen(nil) }
-                else if !fullscreen && isWindowFS { window.toggleFullScreen(nil) }
+                if fullscreen && !isWindowFS {
+                    NSApp.activate(ignoringOtherApps: true)
+                    window.makeKeyAndOrderFront(nil)
+                    window.toggleFullScreen(nil)
+                } else if !fullscreen && isWindowFS {
+                    window.toggleFullScreen(nil)
+                }
             }
         }
         .onChange(of: store.channels) { _, channels in
-            let liveIDs = Set(channels.filter { $0.isRtc }.map { $0.id })
-            let newID = liveIDs.subtracting(autoSwitchedLiveIDs).first
-            autoSwitchedLiveIDs = autoSwitchedLiveIDs.union(liveIDs)
-            guard let id = newID, id != selectedChannelID else { return }
-            let ch = channels.first { $0.id == id }
-            if let ch, ch.isRtc, let pinHash = ch.pinHash, !pinHash.isEmpty,
-               !unlockedChannelIDs.contains(id), !unlockedPINHashes.contains(pinHash) {
-                pendingPINChannel = ch
-            } else {
-                selectedChannelID = id
-                isRtcFullscreen = true
+            // 首次出现专属直播频道时自动选中，使 detail 显示状态
+            if selectedChannelID == nil,
+               let live = channels.first(where: { $0.isRtc }) {
+                selectedChannelID = live.id
             }
         }
         .sheet(isPresented: $showAddURLSheet) {
@@ -152,8 +160,6 @@ struct ContentView: View {
             if let id = selectedChannelID {
                 let stillVisible: Bool
                 switch newMode {
-                case .exclusive:
-                    stillVisible = store.channels.contains { $0.id == id && $0.isRtc }
                 case .favorites:
                     stillVisible = store.channels.contains { $0.id == id && $0.isFavorite }
                 case .recent:
@@ -383,7 +389,7 @@ struct ContentView: View {
             // 列表区永远占据剩余高度,即使在拉取/验证中也保持可见
             List(selection: $selectedChannelID) {
                 if filteredChannels.isEmpty && !store.channels.isEmpty {
-                    Text(filterMode == .exclusive ? "暂无可用专属频道" : "无匹配结果")
+                    Text("无匹配结果")
                         .foregroundStyle(.secondary)
                         .padding()
                 } else if store.channels.isEmpty && !store.isRefreshing {
@@ -460,9 +466,20 @@ struct ContentView: View {
                 }
 
                 if ch.isRtc {
-                    RtcViewerPanel(roomId: ch.rtcRoomId, isFullscreen: $isRtcFullscreen)
-                        .id(ch.rtcRoomId)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 16) {
+                        if rtcVM.state == .live {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 40)).foregroundStyle(.red)
+                            Text("直播中 · 点击全屏").foregroundStyle(.secondary)
+                            Button("全屏观看") { isRtcFullscreen = true }
+                                .buttonStyle(.borderedProminent)
+                        } else {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 40)).foregroundStyle(.secondary)
+                            Text("等待开播...").foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let src = src {
                     PlayerContainerView(source: src)
                         .id(src.url)

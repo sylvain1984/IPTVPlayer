@@ -44,14 +44,8 @@ final class RtcWebViewModel: NSObject, ObservableObject {
     func join() {
         guard state == .idle else { return }
         state = .connecting
-        Task {
-            do {
-                let credentials = try await RTCTokenService.fetch(roomId: roomId, userId: userId, role: "viewer")
-                loadRoom(credentials: credentials)
-            } catch {
-                state = .error("Token 获取失败")
-            }
-        }
+        let token = RTCTokenGenerator.generate(roomId: roomId, userId: userId)
+        loadRoom(credentials: RTCTokenCredentials(appId: "6a13b1373d860b0617f988aa", token: token))
     }
 
     private func loadRoom(credentials: RTCTokenCredentials) {
@@ -100,7 +94,7 @@ final class RtcWebViewModel: NSObject, ObservableObject {
             // Debounce: only go black after 5s of sustained disconnection
             connectingDebounce?.cancel()
             connectingDebounce = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled else { return }
                 self?.state = .connecting
             }
@@ -175,7 +169,9 @@ final class RtcWebViewModel: NSObject, ObservableObject {
             });
 
             engine.on(VERTC.events.onUserUnpublishStream, function() {
-              // Keep background image (last snapshot) — video element will be removed by SDK
+              stopSnapshot();
+              var w = document.getElementById('wrap');
+              if (w) w.style.backgroundImage = '';
               notify('connecting');
             });
 
@@ -210,11 +206,11 @@ final class RtcWebViewModel: NSObject, ObservableObject {
 
 // MARK: - SwiftUI View
 struct RtcViewerPanel: View {
-    @StateObject private var vm: RtcWebViewModel
+    @ObservedObject var vm: RtcWebViewModel
     @Binding var isFullscreen: Bool
 
-    init(roomId: String, isFullscreen: Binding<Bool> = .constant(false)) {
-        _vm = StateObject(wrappedValue: RtcWebViewModel(roomId: roomId))
+    init(vm: RtcWebViewModel, isFullscreen: Binding<Bool> = .constant(false)) {
+        self.vm = vm
         _isFullscreen = isFullscreen
     }
 
@@ -242,8 +238,6 @@ struct RtcViewerPanel: View {
             // Overlay controls always visible (fullscreen + live badge)
             overlayControls
         }
-        .onAppear  { vm.join()  }
-        .onDisappear { vm.leave() }
         .onTapGesture(count: 2) { isFullscreen.toggle() }
         // ESC exits fullscreen; ⌘⌃F enters — stable shortcuts, not dynamic
         .background(

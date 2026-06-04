@@ -29,18 +29,16 @@ final class ChannelStore: ObservableObject {
     /// 猜你喜欢：同分组未看过的频道，按兴趣分综合评分排序
     var recommendedChannels: [Channel] {
         let recentIds = Set(recentChannels.map { $0.id })
-        let prioritized = prioritizedCCTVChannels(from: channels)
 
         let interestGroups = Set(
             channels
                 .filter { $0.isFavorite || recentIds.contains($0.id) }
                 .compactMap { $0.groupTitle }
         )
-        guard !interestGroups.isEmpty else { return Array(prioritized.prefix(20)) }
 
-        let scored = channels
+        return channels
             .filter { !recentIds.contains($0.id) }
-            .filter { isChannelUsableStrict($0) || isPriorityCCTV($0) }
+            .filter { isChannelUsableStrict($0) }   // 只推已验证可用的流
             .map { ch -> (Channel, Int) in
                 let wc = watchHistory[ch.id]?.watchCount ?? 0
                 let score = (ch.isFavorite ? 200 : 0)
@@ -53,15 +51,6 @@ final class ChannelStore: ObservableObject {
             .sorted { $0.1 > $1.1 }
             .prefix(20)
             .map { $0.0 }
-
-        var merged: [Channel] = []
-        var seen = Set<String>()
-        for ch in prioritized + scored where !seen.contains(ch.id) {
-            seen.insert(ch.id)
-            merged.append(ch)
-            if merged.count >= 20 { break }
-        }
-        return merged
     }
 
     private func prioritizedCCTVChannels(from channels: [Channel]) -> [Channel] {
@@ -149,7 +138,6 @@ final class ChannelStore: ObservableObject {
     private let aggregator = SourceAggregator()
     private let validator = StreamValidator()
     private var refreshTimer: Timer?
-    private var livePollTimer: Timer?
     private var hasStartedLivePolling = false
 
     private var storeURL: URL {
@@ -343,21 +331,10 @@ final class ChannelStore: ObservableObject {
         save()
     }
 
-    // MARK: - Live Channel Polling
-
-    private let bonjourBrowser = BonjourChannelBrowser()
+    // MARK: - Live Channel
 
     func refreshLiveChannels() async {
-        let fetched = await LiveChannelRegistry.fetchAll()
-        if !fetched.isEmpty {
-            liveChannels = fetched.map { $0.toChannel() }
-        } else if LiveChannelRegistry.isConfigured {
-            // 已配置 Firebase 但当前没有可用直播：清空旧缓存，避免显示过期房间导致“等待开播”。
-            liveChannels = []
-        } else {
-            // Firebase 未配置时展示约定好的 fallback（broadcaster 也固定用 iptv_private）
-            liveChannels = [fallbackLiveChannel]
-        }
+        liveChannels = [fallbackLiveChannel]
         let regular = channels.filter { !$0.isRtc }
         channels = deduplicatedChannels(liveChannels + regular)
     }
@@ -378,22 +355,7 @@ final class ChannelStore: ObservableObject {
     func startLiveChannelPolling() {
         guard !hasStartedLivePolling else { return }
         hasStartedLivePolling = true
-
-        // Bonjour：同 WiFi 时实时发现多路直播
-        bonjourBrowser.onUpdate = { [weak self] discovered in
-            guard let self, !discovered.isEmpty else { return }
-            self.liveChannels = discovered.map { $0.toChannel() }
-            let regular = self.channels.filter { !$0.isRtc }
-            self.channels = self.deduplicatedChannels(self.liveChannels + regular)
-        }
-        bonjourBrowser.start()
-
-        // 兜底：fallback 频道 + Firebase 轮询（已配置时）
         Task { await refreshLiveChannels() }
-        livePollTimer?.invalidate()
-        livePollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refreshLiveChannels() }
-        }
     }
 
     func scheduleDailyRefresh() {

@@ -1,6 +1,52 @@
 import Foundation
 import CryptoKit
 
+// Generates RTC tokens locally — no Cloudflare dependency.
+enum RTCTokenGenerator {
+    private static let appId  = "6a13b1373d860b0617f988aa"
+    private static let appKey = "221fb57fe116497b9201c3c635f1b23c"
+
+    static func generate(roomId: String, userId: String, expireSeconds: UInt32 = 86400) -> String {
+        let issuedAt = UInt32(Date().timeIntervalSince1970)
+        let expireAt = issuedAt + expireSeconds
+        let nonce    = UInt32.random(in: 0...UInt32.max)
+
+        var msg = Data()
+        msg += le32(nonce)
+        msg += le32(issuedAt)
+        msg += le32(expireAt)
+        msg += pstr(roomId)
+        msg += pstr(userId)
+        msg += le16(6)
+        for i: UInt16 in 0..<6 {
+            msg += le16(i)
+            msg += le32(expireAt)
+        }
+
+        let key = SymmetricKey(data: Data(appKey.utf8))
+        let sig = Data(HMAC<SHA256>.authenticationCode(for: msg, using: key))
+
+        var content = Data()
+        content += le16(UInt16(msg.count))
+        content += msg
+        content += le16(UInt16(sig.count))
+        content += sig
+
+        return "001\(appId)\(content.base64EncodedString())"
+    }
+
+    private static func le16(_ v: UInt16) -> Data {
+        var val = v.littleEndian; return Data(bytes: &val, count: 2)
+    }
+    private static func le32(_ v: UInt32) -> Data {
+        var val = v.littleEndian; return Data(bytes: &val, count: 4)
+    }
+    private static func pstr(_ s: String) -> Data {
+        let bytes = Data(s.utf8)
+        return le16(UInt16(bytes.count)) + bytes
+    }
+}
+
 enum AppConfig {
     static let rtcAppId = value(for: "RTC_APP_ID")
     static let rtcTokenURL = value(for: "RTC_TOKEN_URL")
