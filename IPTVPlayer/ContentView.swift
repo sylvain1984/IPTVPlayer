@@ -106,6 +106,7 @@ struct ContentView: View {
                 isRtcFullscreen = true
             } else if oldState == .live {
                 isRtcFullscreen = false
+                selectedChannelID = nil   // 回到欢迎页
             }
         }
         .onChange(of: isRtcFullscreen) { _, fullscreen in
