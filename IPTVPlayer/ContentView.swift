@@ -60,8 +60,8 @@ struct ContentView: View {
 
     private var availableSubcategories: [String] {
         subcategoryOrder.filter { tag in
-            let cleanedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleanedTag.isEmpty else { return false }
+            guard !tag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            guard !groups.contains(tag) else { return false }  // 已有同名 group，不重复显示
             return store.channels.contains { !$0.isRtc && matchesSubcategory($0, tag: tag) }
         }
     }
